@@ -6,8 +6,9 @@ TelemetrySample firstSample = new TelemetrySample(); // tworzymy jeden obiekt kl
 firstSample.DeviceId = "sensor-01";
 firstSample.Value = 3.7;
 firstSample.Unit = "A";
+firstSample.Timestamp = DateTimeOffset.UtcNow;
 
-Console.WriteLine($"{firstSample.DeviceId}: {firstSample.Value} {firstSample.Unit}");
+Console.WriteLine($"{firstSample.DeviceId}: {firstSample.Value} {firstSample.Unit} {firstSample.Timestamp}");
 
 string json = JsonSerializer.Serialize(firstSample);
 Console.WriteLine(json);
