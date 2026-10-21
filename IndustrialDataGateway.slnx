@@ -1,5 +1,5 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/IndustrialDataGateway/IndustrialDataGateway.csproj" />
+    <Project Path="../../../../../../Documents/Dev/industrial-data-gateway/src/IndustrialDataGateway/IndustrialDataGateway.csproj" />
   </Folder>
 </Solution>

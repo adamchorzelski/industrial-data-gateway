@@ -1,0 +1,6 @@
+{
+  "DeviceId": "sensor-mqtt-01",
+  "Value": 23.5,
+  "Unit": "C",
+  "Timestamp": "2026-10-09T11:00:00+00:00"
+}

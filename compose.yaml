@@ -1,0 +1,14 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.30.2-pg17
+    ports:
+      - "127.0.0.1:5555:5432"
+    volumes:
+      - gateway-timescaledb-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: gateway_telemetry
+      POSTGRES_USER: gateway_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+volumes:
+  gateway-timescaledb-data:
+    external: true
