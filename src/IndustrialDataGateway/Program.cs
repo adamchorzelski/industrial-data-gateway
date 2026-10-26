@@ -1,6 +1,51 @@
 ﻿using IndustrialDataGateway.Models;
 using System.Text.Json;
 using MQTTnet;
+using Npgsql;
+using Microsoft.Data.SqlClient;
+
+var sqlBuilder = new SqlConnectionStringBuilder();
+sqlBuilder.DataSource = "localhost";
+sqlBuilder.InitialCatalog = "gateway_config";
+sqlBuilder.IntegratedSecurity = true;
+sqlBuilder.TrustServerCertificate = true;
+
+await using var sqlConnection = new SqlConnection(sqlBuilder.ConnectionString);
+await sqlConnection.OpenAsync();
+Console.WriteLine("Connected to SQL Server");
+
+string brokerHost;
+int brokerPort;
+string topic;
+
+using (var command = new SqlCommand(
+    "SELECT BrokerHost, BrokerPort, Topic FROM dbo.MqttSettings WHERE Id = 1",
+    sqlConnection))
+{
+    await using var reader = await command.ExecuteReaderAsync();
+
+    if (!await reader.ReadAsync())
+    {
+        throw new InvalidOperationException("MQTT configuration with Id = 1 not found");
+    }
+
+    brokerHost = reader.GetString(reader.GetOrdinal("BrokerHost"));
+    brokerPort = reader.GetInt32(reader.GetOrdinal("BrokerPort"));
+    topic = reader.GetString(reader.GetOrdinal("Topic"));
+}
+
+Console.WriteLine($"MQTT config: {brokerHost}:{brokerPort}, topic: {topic}");
+
+var dbBuilder = new NpgsqlConnectionStringBuilder();
+dbBuilder.Host = "127.0.0.1";
+dbBuilder.Port = 5555;
+dbBuilder.Database = "gateway_telemetry";
+dbBuilder.Username = "gateway_user";
+dbBuilder.Password = Environment.GetEnvironmentVariable("POSTGRES_PASSWORD");
+
+await using var dbConnection = new NpgsqlConnection(dbBuilder.ConnectionString);
+await dbConnection.OpenAsync();
+Console.WriteLine("Connected to PostgreSQL");
 
 MqttClientFactory mqttFactory = new MqttClientFactory(); // tworzymy fabrykę: obiekt z metodami do tworzenia klienta i ustawień
 
@@ -8,81 +53,19 @@ var client = mqttFactory.CreateMqttClient(); // tworzemy klienta
 client.ApplicationMessageReceivedAsync += HandleMqttMessage; //wskazujesz funkcję, którą MQTTnet ma uruchamiać po odebraniu wiadomości. Przy wywołaniu MQTTnet samo przekaże jej obiekt message
 var optionsBuilder = mqttFactory.CreateClientOptionsBuilder(); // tworzymy opcje
 
-optionsBuilder.WithTcpServer("localhost", 1883); // ustawiamy adres brokera: ten komputer, port 1883
+optionsBuilder.WithTcpServer(brokerHost, brokerPort); // ustawiamy adres brokera: ten komputer, port 1883
 
 var options = optionsBuilder.Build(); // pobieramy gotowe ustawienia połączenia i zapisujemy je w options
 
 var subscribeBuilder = mqttFactory.CreateSubscribeOptionsBuilder(); // tworzymy opcje subscribera
 
-subscribeBuilder.WithTopicFilter("factory/temperature"); //  wybieramy temat, z którego chcemy ODBIERAĆ wiadomości
+subscribeBuilder.WithTopicFilter(topic); //  wybieramy temat, z którego chcemy ODBIERAĆ wiadomości
 
 var subscribeOptions = subscribeBuilder.Build(); // pobieramy gotowe ustawienia subskrypcji
 
 await client.ConnectAsync(options); // await variable.Method(argument); client łączy się z brokerem ; await czeka na zakończenie tej operacji
 
 await client.SubscribeAsync(subscribeOptions); // client subskrybuje dany temat 
-
-
-
-
-
-TelemetrySample firstSample = new TelemetrySample(); // tworzymy jeden obiekt klasy 
-
-firstSample.DeviceId = "sensor-01";
-firstSample.Value = 3.7;
-firstSample.Unit = "A";
-firstSample.Timestamp = DateTimeOffset.UtcNow;
-
-Console.WriteLine(firstSample.Describe());
-
-string json = JsonSerializer.Serialize(firstSample);
-Console.WriteLine(json);
-
-TelemetrySample secondSample = new TelemetrySample(); // tworzymy jeden obiekt klasy 
-
-secondSample.DeviceId = "sensor-02";
-secondSample.Value = 24;
-secondSample.Unit = "V";
-secondSample.Timestamp = DateTimeOffset.UtcNow;
-
-Console.WriteLine(secondSample.Describe());
-
-secondSample.Value = 23.45;
-secondSample.Unit = "°C";
-
-Console.WriteLine(secondSample.Describe());
-
-firstSample.Value = 12.5;
-
-Console.WriteLine($"1 obiket: {firstSample.Value}, 2 obiket: {secondSample.Value}");
-
-ProcessMessage(json);
-//deserializacja zawsze tworzy nowy obiekt, nie „przywraca” starego
-
-//test
-string text = """{"DeviceId":"sensor-03","value":55.1,"Unit":"bar"}"""; // specjalnie value a nie Value
-string text2 = """{"DeviceId":"sensor-03","Value":55.1,"Unit":"bar", "Timestamp":"2026-09-19T11:00:00+00:00"} huuh}""";
-
-ProcessMessage(text);
-
-ProcessMessage(text2);
-
-ProcessMessage("""{"DeviceId":"sensor-03","Value":0,"Unit":"bar", "Timestamp":"2026-09-19T11:00:00+00:00"}""");
-
-ProcessMessage(json);
-
-Console.WriteLine("++++++++++++++++++++++++++++");
-ProcessMessage(json);
-text = """{"DeviceId":"sensor-03","Value":55.1,"Unit":"bar", "Timestamp":"2026-09-19T11:00:00+00:00"}""";
-ProcessMessage(text);
-text = """{"DeviceId":"","Value":55.1,"Unit":"bar", "Timestamp":"2026-09-19T11:00:00+00:00"}""";
-ProcessMessage(text);
-text = "null";
-ProcessMessage(text);
-text = """{"DeviceId":"sensor-03","Value":55.1,"Unit":"", "Timestamp":"2026-09-19T11:00:00+00:00"}""";
-ProcessMessage(text);
-
-ProcessMessage(text2);
 
 Console.ReadLine();
 
@@ -111,11 +94,23 @@ void ProcessMessage(string payload)
         else
         {
             Console.WriteLine($"Deserialize {receivedSample.DeviceId}: {receivedSample.Value} {receivedSample.Unit} {receivedSample.Timestamp}");
+            string sql = "INSERT INTO telemetry_samples (device_id, value, unit, timestamp)\r\nVALUES (@device_id, @value, @unit, @timestamp);";
+            using var command = new NpgsqlCommand(sql, dbConnection);
+            command.Parameters.AddWithValue("device_id", receivedSample.DeviceId);
+            command.Parameters.AddWithValue("value", receivedSample.Value);
+            command.Parameters.AddWithValue("unit", receivedSample.Unit);
+            command.Parameters.AddWithValue("timestamp", receivedSample.Timestamp);
+            int rowsAffected = command.ExecuteNonQuery();
+            Console.WriteLine($"Saved rows: {rowsAffected}");
         }
     }
     catch (JsonException ex)
     {
         Console.WriteLine($"Invalid message: {ex.Message}");
+    }
+    catch (NpgsqlException ex)
+    {
+        Console.WriteLine($"Database error: {ex.Message}");
     }
 }
 
